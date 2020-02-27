@@ -41,6 +41,9 @@ declare module "react-native-image-crop-picker" {
     export interface Image {
         path: string;
         size: number;
+        duration: null | number;
+        framerate?: null | number;
+        bitrate?: null | number;
         data: null | string;
         width: number;
         height: number;
@@ -50,7 +53,6 @@ declare module "react-native-image-crop-picker" {
         filename: string;
         creationDate: string;
         modificationDate?: string;
-        duration: null | number;
     }
 
     export interface CropRect {

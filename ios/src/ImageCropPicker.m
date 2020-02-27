@@ -150,14 +150,14 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            
+
             UIImagePickerController *picker = [[UIImagePickerController alloc] init];
             picker.delegate = self;
             picker.allowsEditing = NO;
             picker.sourceType = UIImagePickerControllerSourceTypeCamera;
 
             NSString *mediaType = [self.options objectForKey:@"mediaType"];
-            
+
             if ([mediaType isEqualToString:@"video"]) {
                 NSArray *availableTypes = [UIImagePickerController availableMediaTypesForSourceType:UIImagePickerControllerSourceTypeCamera];
 
@@ -170,7 +170,7 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
             if ([[self.options objectForKey:@"useFrontCamera"] boolValue]) {
                 picker.cameraDevice = UIImagePickerControllerCameraDeviceFront;
             }
-            
+
             [[self getRootVC] presentViewController:picker animated:YES completion:nil];
         });
     }];
@@ -183,7 +183,7 @@ RCT_EXPORT_METHOD(openCamera:(NSDictionary *)options
 
 - (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info {
     NSString* mediaType = [info objectForKey:UIImagePickerControllerMediaType];
-    
+
     if (CFStringCompare ((__bridge CFStringRef) mediaType, kUTTypeMovie, 0) == kCFCompareEqualTo) {
         NSURL *url = [info objectForKey:UIImagePickerControllerMediaURL];
         AVURLAsset *asset = [AVURLAsset assetWithURL:url];
@@ -299,7 +299,7 @@ RCT_EXPORT_METHOD(openPicker:(NSDictionary *)options
             imagePickerController.maximumNumberOfSelection = abs([[self.options objectForKey:@"maxFiles"] intValue]);
             imagePickerController.showsNumberOfSelectedAssets = [[self.options objectForKey:@"showsSelectedCount"] boolValue];
             imagePickerController.sortOrder = [self.options objectForKey:@"sortOrder"];
-            
+
             NSArray *smartAlbums = [self.options objectForKey:@"smartAlbums"];
             if (smartAlbums != nil) {
                 NSDictionary *albums = @{
@@ -332,7 +332,7 @@ RCT_EXPORT_METHOD(openPicker:(NSDictionary *)options
                                          @"Animated" : @(PHAssetCollectionSubtypeSmartAlbumAnimated),
                                          @"LongExposure" : @(PHAssetCollectionSubtypeSmartAlbumLongExposures),
                                          };
-                
+
                 NSMutableArray *albumsToShow = [NSMutableArray arrayWithCapacity:smartAlbums.count];
                 for (NSString* smartAlbum in smartAlbums) {
                     if ([albums objectForKey:smartAlbum] != nil) {
@@ -355,7 +355,7 @@ RCT_EXPORT_METHOD(openPicker:(NSDictionary *)options
                     imagePickerController.mediaType = QBImagePickerMediaTypeAny;
                 }
             }
-            
+
             [imagePickerController setModalPresentationStyle: UIModalPresentationFullScreen];
             [[self getRootVC] presentViewController:imagePickerController animated:YES completion:nil];
         });
@@ -427,17 +427,23 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
 
     [self.compression compressVideo:sourceURL outputURL:outputURL withOptions:self.options handler:^(AVAssetExportSession *exportSession) {
         if (exportSession.status == AVAssetExportSessionStatusCompleted) {
-            AVAsset *compressedAsset = [AVAsset assetWithURL:outputURL];
+            NSDictionary *assetOptions = @{AVURLAssetPreferPreciseDurationAndTimingKey: @YES};
+            AVURLAsset *compressedAsset = [AVURLAsset URLAssetWithURL:outputURL options:assetOptions];
             AVAssetTrack *track = [[compressedAsset tracksWithMediaType:AVMediaTypeVideo] firstObject];
 
             NSNumber *fileSizeValue = nil;
             [outputURL getResourceValue:&fileSizeValue
                                  forKey:NSURLFileSizeKey
                                   error:nil];
-            
-            AVURLAsset *durationFromUrl = [AVURLAsset assetWithURL:outputURL];
-            CMTime time = [durationFromUrl duration];
-            int milliseconds = ceil(time.value/time.timescale) * 1000;
+
+            float durationSeconds = CMTimeGetSeconds([compressedAsset duration]);
+            int milliseconds = ceil(durationSeconds * 1000);
+
+            // Calculate bitrate of each individual track
+            float sumBitrate = 0;
+            for (AVAssetTrack *track in [compressedAsset tracks]) {
+                sumBitrate += track.estimatedDataRate ?: 0;
+            }
 
             completion([self createAttachmentResponse:[outputURL absoluteString]
                                              withExif:nil
@@ -448,7 +454,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
                                            withHeight:[NSNumber numberWithFloat:track.naturalSize.height]
                                              withMime:@"video/mp4"
                                              withSize:fileSizeValue
-                                             withDuration:[NSNumber numberWithFloat:milliseconds]
+                                         withDuration:[NSNumber numberWithInt:milliseconds]
+                                        withFramerate:[NSNumber numberWithFloat:track.nominalFrameRate]
+                                          withBitrate:[NSNumber numberWithFloat:sumBitrate]
                                              withData:nil
                                              withRect:CGRectNull
                                      withCreationDate:nil
@@ -479,7 +487,7 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
      }];
 }
 
-- (NSDictionary*) createAttachmentResponse:(NSString*)filePath withExif:(NSDictionary*) exif withSourceURL:(NSString*)sourceURL withLocalIdentifier:(NSString*)localIdentifier withFilename:(NSString*)filename withWidth:(NSNumber*)width withHeight:(NSNumber*)height withMime:(NSString*)mime withSize:(NSNumber*)size withDuration:(NSNumber*)duration withData:(NSString*)data withRect:(CGRect)cropRect withCreationDate:(NSDate*)creationDate withModificationDate:(NSDate*)modificationDate {
+- (NSDictionary*) createAttachmentResponse:(NSString*)filePath withExif:(NSDictionary*) exif withSourceURL:(NSString*)sourceURL withLocalIdentifier:(NSString*)localIdentifier withFilename:(NSString*)filename withWidth:(NSNumber*)width withHeight:(NSNumber*)height withMime:(NSString*)mime withSize:(NSNumber*)size withDuration:(NSNumber*)duration withFramerate:(NSNumber*)framerate withBitrate:(NSNumber*)bitrate withData:(NSString*)data withRect:(CGRect)cropRect withCreationDate:(NSDate*)creationDate withModificationDate:(NSDate*)modificationDate {
     return @{
              @"path": (filePath && ![filePath isEqualToString:(@"")]) ? filePath : [NSNull null],
              @"sourceURL": (sourceURL) ? sourceURL : [NSNull null],
@@ -489,6 +497,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
              @"height": height,
              @"mime": mime,
              @"size": size,
+             @"duration": (duration) ? duration : [NSNull null],
+             @"framerate": (framerate) ? framerate : [NSNull null],
+             @"bitrate": (bitrate) ? bitrate : [NSNull null],
              @"data": (data) ? data : [NSNull null],
              @"exif": (exif) ? exif : [NSNull null],
              @"cropRect": CGRectIsNull(cropRect) ? [NSNull null] : [ImageCropPicker cgRectToDictionary:cropRect],
@@ -525,7 +536,7 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
     PHImageRequestOptions* options = [[PHImageRequestOptions alloc] init];
     options.synchronous = NO;
     options.networkAccessAllowed = YES;
-    
+
     if ([[[self options] objectForKey:@"multiple"] boolValue]) {
         NSMutableArray *selections = [[NSMutableArray alloc] init];
 
@@ -575,7 +586,7 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
                              [lock lock];
                              @autoreleasepool {
                                  UIImage *imgT = [UIImage imageWithData:imageData];
-                                 
+
                                  Boolean forceJpg = [[self.options valueForKey:@"forceJpg"] boolValue];
 
                                  NSNumber *compressQuality = [self.options valueForKey:@"compressImageQuality"];
@@ -631,7 +642,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
                                                                            withHeight:imageResult.height
                                                                              withMime:imageResult.mime
                                                                              withSize:[NSNumber numberWithUnsignedInteger:imageResult.data.length]
-                                                                             withDuration: nil
+                                                                         withDuration:nil
+                                                                        withFramerate:nil
+                                                                          withBitrate:nil
                                                                              withData:[[self.options objectForKey:@"includeBase64"] boolValue] ? [imageResult.data base64EncodedStringWithOptions:0]: nil
                                                                              withRect:CGRectNull
                                                                      withCreationDate:phAsset.creationDate
@@ -757,7 +770,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
                                              withHeight:imageResult.height
                                                withMime:imageResult.mime
                                                withSize:[NSNumber numberWithUnsignedInteger:imageResult.data.length]
-                                               withDuration: nil
+                                           withDuration:nil
+                                          withFramerate:nil
+                                            withBitrate:nil
                                                withData:[[self.options objectForKey:@"includeBase64"] boolValue] ? [imageResult.data base64EncodedStringWithOptions:0] : nil
                                                withRect:CGRectNull
                                        withCreationDate:creationDate
@@ -796,7 +811,7 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
     // so resize image
     CGSize desiredImageSize = CGSizeMake([[[self options] objectForKey:@"width"] intValue],
                                          [[[self options] objectForKey:@"height"] intValue]);
-    
+
     UIImage *resizedImage = [croppedImage resizedImageToFitInSize:desiredImageSize scaleIfSmaller:YES];
     ImageResult *imageResult = [self.compression compressImage:resizedImage withOptions:self.options];
 
@@ -823,7 +838,9 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
                                          withHeight:imageResult.height
                                            withMime:imageResult.mime
                                            withSize:[NSNumber numberWithUnsignedInteger:imageResult.data.length]
-                                           withDuration: nil
+                                       withDuration:nil
+                                      withFramerate:nil
+                                        withBitrate:nil
                                            withData:[[self.options objectForKey:@"includeBase64"] boolValue] ? [imageResult.data base64EncodedStringWithOptions:0] : nil
                                            withRect:cropRect
                                    withCreationDate:self.croppingFile[@"creationDate"]
@@ -870,7 +887,7 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
         if (widthRatio > 0 && heightRatio > 0){
             CGSize aspectRatio = CGSizeMake(widthRatio, heightRatio);
             cropVC.customAspectRatio = aspectRatio;
-            
+
         }
         cropVC.aspectRatioLockEnabled = ![[self.options objectForKey:@"freeStyleCropEnabled"] boolValue];
         cropVC.resetAspectRatioEnabled = !cropVC.aspectRatioLockEnabled;
@@ -878,12 +895,12 @@ RCT_EXPORT_METHOD(openCropper:(NSDictionary *)options
 
     cropVC.title = [[self options] objectForKey:@"cropperToolbarTitle"];
     cropVC.delegate = self;
-    
+
     cropVC.doneButtonTitle = [self.options objectForKey:@"cropperChooseText"];
     cropVC.cancelButtonTitle = [self.options objectForKey:@"cropperCancelText"];
-    
+
     cropVC.modalPresentationStyle = UIModalPresentationFullScreen;
-        
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [[self getRootVC] presentViewController:cropVC animated:FALSE completion:nil];
     });
